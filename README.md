@@ -54,3 +54,7 @@ Verify with: ots verify constexpr_eval.hpp.ots
 License
 MIT License — see LICENSE
 Copyright © 2026 zenithcpp
+
+[![Release](https://img.shields.io/github/v/release/zenithcpp/constexpr-eval?label=Latest%20Release)](https://github.com/zenithcpp/constexpr-eval/releases/latest)
+[![License](https://img.shields.io/github/license/zenithcpp/constexpr-eval)](LICENSE)
+[![Bitcoin Timestamp](https://img.shields.io/badge/Bitcoin-Timestamped-Jan%2010%2C%202026-orange)](constexpr_eval.hpp.ots)
