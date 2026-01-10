@@ -39,8 +39,17 @@ No variables or user-defined functions
 Max ~1000 tokens (configurable)
 
 ## Bitcoin Blockchain Timestamp (Proof of Existence)
-This header will be timestamped on the Bitcoin blockchain using OpenTimestamps (January 10, 2026).
-File: constexpr_eval.hpp.ots (will be added after stamping)
+Timestamped on the Bitcoin blockchain using OpenTimestamps on January 10, 2026.
+
+- Initial submission: January 10, 2026
+- Full attestation: [will show block/txid once complete]
+
+File: `constexpr_eval.hpp.ots`
+
+Verify with:
+```bash
+ots verify constexpr_eval.hpp.ots
+
 Verify with: ots verify constexpr_eval.hpp.ots
 License
 MIT License — see LICENSE
