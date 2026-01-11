@@ -39,19 +39,18 @@ No variables or user-defined functions
 Max ~1000 tokens (configurable)
 
 ## Bitcoin Blockchain Timestamp (Proof of Existence)
-Timestamped on the Bitcoin blockchain using OpenTimestamps on January 10, 2026.
+
+This header has been **fully timestamped and attested** on the Bitcoin blockchain using OpenTimestamps.
 
 - Initial submission: January 10, 2026
-- Full attestation: [will show block/txid once complete]
+- Full attestation completed: January 11, 2026
 
-File: `constexpr_eval.hpp.ots`
+File: `constexpr_eval.hpp.ots` (included in repo)
 
-Verify with:
+Verify anytime with:
 ```bash
 ots verify constexpr_eval.hpp.ots
 
-Verify with: ots verify constexpr_eval.hpp.ots
-License
 MIT License — see LICENSE
 Copyright © 2026 zenithcpp
 
