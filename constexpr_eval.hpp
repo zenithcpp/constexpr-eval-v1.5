@@ -1,7 +1,7 @@
 #pragma once
-// constexpr_eval.hpp v1.5 -Community Edition
+// constexpr_eval.hpp v1.5 - Ultimate Community Edition
 // Single-header, zero-dependency constexpr arithmetic expression evaluator
-// C++23 recommended (C++17+ compatible with pi/e fallback)
+// Requires C++23 (constexpr math support)
 // MIT License - free to use, share, modify
 //
 // Features:
@@ -23,18 +23,22 @@
 //
 // Usage examples at end.
 
+#if __cplusplus < 202302L
+#error "constexpr_eval requires C++23 constexpr math support"
+#endif
+
 #include <cstdint>
 #include <cstddef>
 #include <array>
 #include <optional>
 #include <cmath>
 #include <string_view>
-
-#if __cplusplus >= 202002L
 #include <numbers>
-#endif
 
 namespace ce::detail {
+
+template <class>
+inline constexpr bool dependent_false = false;
 
 enum class TokenKind : uint8_t {
   Error,
@@ -43,7 +47,7 @@ enum class TokenKind : uint8_t {
   Constant,
   IntegerLiteral,
   FloatLiteral,
-  Plus, Minus, Star, Slash, Percent, Caret,
+  Plus, Minus, Star, Slash, Percent, CaretOrPow,
   Amp, Pipe, Tilde, LShift, RShift,
   LParen, RParen, Comma
 };
@@ -58,7 +62,7 @@ struct Token {
 
 constexpr bool is_space(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
 
-constexpr bool is_alpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+constexpr bool is_alpha(char c) { return (c >= 'a' && c <= 'z'); } // enforce lowercase
 
 constexpr bool is_ident_continue(char c) { return is_alpha(c) || (c >= '0' && c <= '9'); }
 
@@ -82,7 +86,6 @@ struct StringLiteral {
   }
 };
 
-// Deduction guide
 template <std::size_t N>
 StringLiteral(const char (&)[N]) -> StringLiteral<N - 1>;
 
@@ -131,7 +134,7 @@ struct Lexer {
           case '*': k = TokenKind::Star; break;
           case '/': k = TokenKind::Slash; break;
           case '%': k = TokenKind::Percent; break;
-          case '^': k = TokenKind::Caret; break;
+          case '^': k = TokenKind::CaretOrPow; break;
           case '(': k = TokenKind::LParen; break;
           case ')': k = TokenKind::RParen; break;
           case ',': k = TokenKind::Comma; break;
@@ -141,7 +144,7 @@ struct Lexer {
         continue;
       }
 
-      // Identifiers/constants
+      // Identifiers/constants (lowercase only)
       if (is_alpha(c)) {
         ++p;
         while (p < end && is_ident_continue(*p)) ++p;
@@ -210,6 +213,9 @@ struct Lexer {
       tokens[count++] = Token(TokenKind::Error, start, 1);
       ++p;
     }
+    if (count >= tokens.size() - 1) {
+      static_assert(dependent_false<Lit>, "constexpr_eval error: token buffer overflow (increase MaxTokens)");
+    }
     tokens[count++] = Token(TokenKind::EndOfFile, end, 0);
     return std::pair{tokens, count};
   }
@@ -223,26 +229,13 @@ struct int_tag {};
 struct double_tag {};
 struct long_double_tag {};
 
-constexpr double get_pi() {
-#if __cplusplus >= 202002L
-  return std::numbers::pi;
-#else
-  return 3.141592653589793238462643383279502884L;
-#endif
-}
+constexpr double get_pi() { return std::numbers::pi; }
 
-constexpr double get_e() {
-#if __cplusplus >= 202002L
-  return std::numbers::e;
-#else
-  return 2.718281828459045235360287471352662497L;
-#endif
-}
+constexpr double get_e() { return std::numbers::e; }
 
-// Function arg count + name to type
 constexpr int function_arg_count(std::string_view name) {
   if (name == "pow" || name == "hypot" || name == "fmod") return 2;
-  return 1; // all others unary
+  return 1;
 }
 
 constexpr double apply_unary(std::string_view name, double arg) {
@@ -264,7 +257,7 @@ constexpr double apply_unary(std::string_view name, double arg) {
   if (name == "floor") return std::floor(arg);
   if (name == "ceil") return std::ceil(arg);
   if (name == "round") return std::round(arg);
-  static_assert(false, "constexpr_eval error: unsupported unary function");
+  static_assert(dependent_false<void>, "constexpr_eval error: unsupported unary function");
   return 0.0;
 }
 
@@ -272,7 +265,7 @@ constexpr double apply_binary(std::string_view name, double a1, double a2) {
   if (name == "pow") return std::pow(a1, a2);
   if (name == "hypot") return std::hypot(a1, a2);
   if (name == "fmod") return std::fmod(a1, a2);
-  static_assert(false, "constexpr_eval error: unsupported binary function");
+  static_assert(dependent_false<void>, "constexpr_eval error: unsupported binary function");
   return 0.0;
 }
 
@@ -342,6 +335,16 @@ constexpr T parse_number(const char* s, std::size_t len) {
   return negative ? -value : value;
 }
 
+// Grammar (highest → lowest precedence):
+// atom : literals | constants | function | '(' expr ')'
+// unary : (+ | - | ~) unary | atom
+// shift : unary ( (<< | >>) unary )*
+// and : shift ( & shift )*
+// xor : and ( ^ and )*
+// or : xor ( | xor )*
+// term : or ( (* | / | %) or )*
+// expr : term ( (+ | -) term )*
+
 template <StringLiteral Lit, std::size_t MaxTokens = 1024, typename Tag = double_tag>
 struct Parser {
   using L = Lexer<Lit, MaxTokens>;
@@ -350,14 +353,6 @@ struct Parser {
 
   using ValueType = std::conditional_t<std::is_same_v<Tag, int_tag>, int64_t,
                       std::conditional_t<std::is_same_v<Tag, long_double_tag>, long double, double>>;
-
-  static constexpr std::optional<ValueType> parse_atom(std::size_t& pos);
-  static constexpr std::optional<ValueType> parse_unary(std::size_t& pos);
-  static constexpr std::optional<ValueType> parse_shift(std::size_t& pos);
-  static constexpr std::optional<ValueType> parse_and(std::size_t& pos);
-  static constexpr std::optional<ValueType> parse_xor(std::size_t& pos);
-  static constexpr std::optional<ValueType> parse_or(std::size_t& pos);
-  static constexpr std::optional<ValueType> parse_expr(std::size_t& pos);
 
   static constexpr std::optional<ValueType> parse_atom(std::size_t& pos) {
     if (pos >= n_tokens - 1) return {};
@@ -376,7 +371,7 @@ struct Parser {
       std::string_view name(t.start, t.length);
       ++pos;
       if (pos >= n_tokens - 1 || tokens[pos].kind != TokenKind::LParen) {
-        static_assert(false, "constexpr_eval error: expected ( for function call");
+        static_assert(dependent_false<Lit>, "constexpr_eval error: expected ( for function call");
       }
       ++pos;
       auto arg1 = parse_expr(pos);
@@ -391,14 +386,14 @@ struct Parser {
         has_two = true;
       }
       if (pos >= n_tokens - 1 || tokens[pos].kind != TokenKind::RParen) {
-        static_assert(false, "constexpr_eval error: expected ) in function call");
+        static_assert(dependent_false<Lit>, "constexpr_eval error: expected ) in function call");
       }
       ++pos;
 
       int expected_args = function_arg_count(name);
       int actual_args = has_two ? 2 : 1;
       if (actual_args != expected_args) {
-        static_assert(false, "constexpr_eval error: wrong number of arguments for function");
+        static_assert(dependent_false<Lit>, "constexpr_eval error: wrong number of arguments for function");
       }
 
       if (has_two) {
@@ -420,29 +415,18 @@ struct Parser {
 
     if (t.kind == TokenKind::FloatLiteral) {
       if constexpr (std::is_same_v<Tag, int_tag>) {
-        static_assert(false, "constexpr_eval error: floating-point literal not allowed in int_tag");
+        static_assert(dependent_false<Lit>, "constexpr_eval error: floating-point literal not allowed in int_tag");
       }
       ++pos;
       return parse_number<ValueType>(t.start, t.length);
     }
 
-    if (t.kind == TokenKind::Plus || t.kind == TokenKind::Minus || t.kind == TokenKind::Tilde) {
-      TokenKind op = t.kind;
-      ++pos;
-      auto sub = parse_atom(pos);
-      if (!sub) return {};
-      if (op == TokenKind::Plus) return *sub;
-      if (op == TokenKind::Minus) return -(*sub);
-      if constexpr (std::is_same_v<Tag, int_tag>) {
-        if (op == TokenKind::Tilde) return ~(*sub);
-      }
-      static_assert(false, "constexpr_eval error: unary ~ only allowed in int_tag");
-    }
-
     if (t.kind == TokenKind::LParen) {
       ++pos;
       auto sub = parse_expr(pos);
-      if (!sub || pos >= n_tokens - 1 || tokens[pos].kind != TokenKind::RParen) return {};
+      if (!sub || pos >= n_tokens - 1 || tokens[pos].kind != TokenKind::RParen) {
+        static_assert(dependent_false<Lit>, "constexpr_eval error: unbalanced parentheses");
+      }
       ++pos;
       return sub;
     }
@@ -451,7 +435,25 @@ struct Parser {
   }
 
   static constexpr std::optional<ValueType> parse_unary(std::size_t& pos) {
-    return parse_atom(pos); // unary handled in atom
+    if (pos >= n_tokens - 1) return {};
+
+    const Token& t = tokens[pos];
+
+    if (t.kind == TokenKind::Plus || t.kind == TokenKind::Minus || t.kind == TokenKind::Tilde) {
+      TokenKind op = t.kind;
+      ++pos;
+      auto sub = parse_unary(pos);
+      if (!sub) return {};
+      if (op == TokenKind::Plus) return *sub;
+      if (op == TokenKind::Minus) return -(*sub);
+      if constexpr (std::is_same_v<Tag, int_tag>) {
+        if (op == TokenKind::Tilde) return ~(*sub);
+      } else {
+        static_assert(dependent_false<Lit>, "constexpr_eval error: unary ~ only allowed in int_tag");
+      }
+    }
+
+    return parse_atom(pos);
   }
 
   static constexpr std::optional<ValueType> parse_shift(std::size_t& pos) {
@@ -466,7 +468,7 @@ struct Parser {
         if (op == TokenKind::LShift) *left = *left << *right;
         else *left = *left >> *right;
       } else {
-        static_assert(false, "constexpr_eval error: shift operators only allowed in int_tag");
+        static_assert(dependent_false<Lit>, "constexpr_eval error: shift operators only allowed in int_tag");
       }
     }
     return left;
@@ -483,7 +485,7 @@ struct Parser {
       if constexpr (std::is_same_v<Tag, int_tag>) {
         *left = *left & *right;
       } else {
-        static_assert(false, "constexpr_eval error: & operator only allowed in int_tag");
+        static_assert(dependent_false<Lit>, "constexpr_eval error: & operator only allowed in int_tag");
       }
     }
     return left;
@@ -493,7 +495,7 @@ struct Parser {
     auto left = parse_and(pos);
     if (!left) return {};
 
-    while (pos < n_tokens - 1 && tokens[pos].kind == TokenKind::Caret) {
+    while (pos < n_tokens - 1 && tokens[pos].kind == TokenKind::CaretOrPow) {
       ++pos;
       auto right = parse_and(pos);
       if (!right) return {};
@@ -519,7 +521,7 @@ struct Parser {
       if constexpr (std::is_same_v<Tag, int_tag>) {
         *left = *left | *right;
       } else {
-        static_assert(false, "constexpr_eval error: | operator only allowed in int_tag");
+        static_assert(dependent_false<Lit>, "constexpr_eval error: | operator only allowed in int_tag");
       }
     }
     return left;
@@ -537,7 +539,7 @@ struct Parser {
       double l = static_cast<double>(*left);
       double r = static_cast<double>(*right);
       if (r == 0.0 && (op == TokenKind::Slash || op == TokenKind::Percent)) {
-        static_assert(false, "constexpr_eval error: division or modulo by zero");
+        static_assert(dependent_false<Lit>, "constexpr_eval error: division or modulo by zero");
       }
       if (op == TokenKind::Star) *left = static_cast<ValueType>(l * r);
       else if (op == TokenKind::Slash) *left = static_cast<ValueType>(l / r);
@@ -567,12 +569,12 @@ struct Parser {
     auto result = parse_expr(pos);
 
     if (!result || pos != n_tokens - 2) {
-      static_assert(false, "constexpr_eval parse error: invalid syntax, div/mod by zero, unsupported function, unbalanced parens, or trailing tokens");
+      static_assert(dependent_false<Lit>, "constexpr_eval parse error: invalid syntax, div/mod by zero, unsupported function, unbalanced parens, or trailing tokens");
     }
 
     if constexpr (std::is_floating_point_v<ValueType>) {
       if (!std::isfinite(static_cast<double>(*result))) {
-        static_assert(false, "constexpr_eval error: result is NaN or infinity (overflow or invalid operation)");
+        static_assert(dependent_false<Lit>, "constexpr_eval error: result is NaN or infinity (overflow or invalid operation)");
       }
     }
 
@@ -591,7 +593,6 @@ constexpr auto eval() {
   return ce::detail::Parser<Lit, MaxTokens, Tag>::value;
 }
 
-// Overload for Tag without MaxTokens
 template <StringLiteral Lit, typename Tag>
 constexpr auto eval() {
   return ce::detail::Parser<Lit, 1024, Tag>::value;
@@ -608,4 +609,4 @@ using long_double_tag = ce::detail::long_double_tag;
 //
 // constexpr int64_t bit = ce::eval<"0xFF & ~0b1010 | (0x10 << 2)", ce::int_tag>();
 //
-// constexpr long double ld = ce::eval<"hypot(3,4)", ce::long_double_tag>();  // 5.0L
+// constexpr long double ld = ce::eval<"hypot(3,4)", ce::long_double_tag>(); // 5.0L
